@@ -1,0 +1,16 @@
+# dependencies
+/node_modules
+
+# production build
+/build
+
+# environment variables — never commit real API keys
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# misc
+.DS_Store
+npm-debug.log*
