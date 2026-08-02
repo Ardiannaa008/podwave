@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Alert, Button } from '@mui/material';
+import { HOST_VOICE_PROFILES } from '../utils/scriptGenerator';
 
 // Splits one segment's text into small chunks, because some browsers stop a
 // single SpeechSynthesisUtterance before a long passage has finished.
@@ -36,16 +37,134 @@ function splitIntoSpeechChunks(text, maxLength = 220) {
 // distinct base pitch too — even when the OS only has one usable voice,
 // pitch alone makes two hosts sound noticeably different from each other.
 const SPEAKER_BASE_PITCH = [1.0, 1.18];
+const SPEAKER_BASE_RATE = [1.0, 1.0];
+const VOICE_GENDER_MATCHERS = {
+  female: [
+    'female',
+    'zira',
+    'samantha',
+    'victoria',
+    'karen',
+    'susan',
+    'linda',
+    'moira',
+    'tessa',
+    'fiona',
+    'google us english',
+    'hazel',
+  ],
+  male: [
+    'male',
+    'david',
+    'mark',
+    'alex',
+    'daniel',
+    'fred',
+    'george',
+    'james',
+  ],
+};
 
-function pickVoicesForSpeakers(speakerNames, availableVoices) {
-  const english = availableVoices.filter((v) => v.lang?.toLowerCase().startsWith('en'));
+function stableHash(value) {
+  return String(value)
+    .split('')
+    .reduce((sum, char) => sum + char.charCodeAt(0), 0);
+}
+
+function getHostVoiceProfile({ hosts, hostPersonaId }) {
+  if (hostPersonaId && HOST_VOICE_PROFILES[hostPersonaId]) {
+    return HOST_VOICE_PROFILES[hostPersonaId];
+  }
+
+  if (Array.isArray(hosts) && hosts.length >= 2) {
+    const key = hosts.slice(0, 2).map((name) => String(name).trim()).join('|');
+    return HOST_VOICE_PROFILES[key] || null;
+  }
+
+  return null;
+}
+
+function isEnglishVoice(voice) {
+  return voice.lang?.toLowerCase().startsWith('en');
+}
+
+function getVoiceGender(voice) {
+  const name = voice.name?.toLowerCase() || '';
+
+  if (VOICE_GENDER_MATCHERS.female.some((matcher) => name.includes(matcher))) {
+    return 'female';
+  }
+  if (VOICE_GENDER_MATCHERS.male.some((matcher) => name.includes(matcher))) {
+    return 'male';
+  }
+
+  return 'neutral';
+}
+
+function rotateByOffset(items, offset) {
+  if (items.length <= 1) return items;
+  const start = offset % items.length;
+  return [...items.slice(start), ...items.slice(0, start)];
+}
+
+function pickUnusedVoice(candidates, usedVoices) {
+  return candidates.find((voice) => !usedVoices.has(voice)) || null;
+}
+
+function pickVoiceForGender(gender, allVoices, fallbackPool, voiceOffset, usedVoices) {
+  if (gender !== 'female' && gender !== 'male') return null;
+
+  const genderMatches = allVoices.filter((voice) => getVoiceGender(voice) === gender);
+  const englishMatches = genderMatches.filter(isEnglishVoice);
+  const preferredMatches = englishMatches.length > 0 ? englishMatches : genderMatches;
+  const matchedVoice = pickUnusedVoice(rotateByOffset(preferredMatches, voiceOffset), usedVoices);
+
+  if (matchedVoice) return matchedVoice;
+
+  return pickUnusedVoice(rotateByOffset(fallbackPool, voiceOffset), usedVoices);
+}
+
+function pickFallbackVoice(pool, voiceOffset, voiceIndex, usedVoices) {
+  if (pool.length === 0) return null;
+
+  const orderedPool = rotateByOffset(pool, voiceOffset + voiceIndex);
+  return pickUnusedVoice(orderedPool, usedVoices) || orderedPool[0];
+}
+
+function nudgePitchForGender(pitch, gender, hasGenderMatchedVoice) {
+  if (hasGenderMatchedVoice) return pitch;
+  if (gender === 'female') return Math.max(1.15, Math.min(1.35, pitch));
+  if (gender === 'male') return Math.min(0.95, Math.max(0.75, pitch));
+  return pitch;
+}
+
+function pickVoicesForSpeakers(speakerNames, availableVoices, hostContext = {}) {
+  const english = availableVoices.filter(isEnglishVoice);
   const pool = english.length >= 2 ? english : availableVoices;
+  const personaProfile = getHostVoiceProfile(hostContext);
+  const voiceOffset =
+    personaProfile && pool.length > 0
+      ? stableHash(personaProfile.id || personaProfile.names.join('|')) % pool.length
+      : 0;
 
   const map = {};
+  const usedVoices = new Set();
   speakerNames.forEach((name, i) => {
+    const personaIndex = personaProfile?.names.indexOf(name) ?? -1;
+    const voiceIndex = personaIndex >= 0 ? personaIndex : i;
+    const voiceTraits = personaIndex >= 0 ? personaProfile.voiceProfile[personaIndex] : null;
+    const gender = voiceTraits?.gender || 'neutral';
+    const genderVoice = pickVoiceForGender(gender, availableVoices, pool, voiceOffset, usedVoices);
+    const fallbackVoice = genderVoice || pickFallbackVoice(pool, voiceOffset, voiceIndex, usedVoices);
+    const hasGenderMatchedVoice = Boolean(genderVoice && getVoiceGender(genderVoice) === gender);
+    const basePitch = voiceTraits?.pitch ?? SPEAKER_BASE_PITCH[i % SPEAKER_BASE_PITCH.length];
+
+    if (fallbackVoice) usedVoices.add(fallbackVoice);
+
     map[name] = {
-      voice: pool.length > 0 ? pool[i % pool.length] : null,
-      basePitch: SPEAKER_BASE_PITCH[i % SPEAKER_BASE_PITCH.length],
+      voice: fallbackVoice,
+      basePitch: nudgePitchForGender(basePitch, gender, hasGenderMatchedVoice),
+      baseRate: voiceTraits?.rate ?? SPEAKER_BASE_RATE[i % SPEAKER_BASE_RATE.length],
     };
   });
   return map;
@@ -82,9 +201,9 @@ function buildPlayQueue(segments, voiceMap, baseRate) {
   const queue = [];
   segments.forEach((seg) => {
     const chunks = splitIntoSpeechChunks(seg.text);
-    const speakerInfo = voiceMap[seg.speaker] || { voice: null, basePitch: 1 };
+    const speakerInfo = voiceMap[seg.speaker] || { voice: null, basePitch: 1, baseRate: 1 };
     chunks.forEach((chunk, i) => {
-      const prosody = computeProsody(chunk, speakerInfo.basePitch, baseRate);
+      const prosody = computeProsody(chunk, speakerInfo.basePitch, baseRate * speakerInfo.baseRate);
       queue.push({
         text: chunk,
         speaker: seg.speaker,
@@ -98,7 +217,7 @@ function buildPlayQueue(segments, voiceMap, baseRate) {
   return queue;
 }
 
-export default function AudioPlayer({ segments, voiceRate = 1 }) {
+export default function AudioPlayer({ segments, voiceRate = 1, hosts, hostPersonaId }) {
   const queueRef = useRef([]);
   const indexRef = useRef(0);
   const playSessionRef = useRef(0);
@@ -186,7 +305,10 @@ export default function AudioPlayer({ segments, voiceRate = 1 }) {
       return;
     }
 
-    const voiceMap = pickVoicesForSpeakers(speakerNames, window.speechSynthesis.getVoices());
+    const voiceMap = pickVoicesForSpeakers(speakerNames, window.speechSynthesis.getVoices(), {
+      hosts,
+      hostPersonaId,
+    });
     window.speechSynthesis.cancel();
     setSpeechError('');
     queueRef.current = buildPlayQueue(cleanSegments, voiceMap, voiceRate);

@@ -8,9 +8,98 @@ const MAX_TOPIC_LENGTH = 180;
 const MAX_SEGMENTS = 120;
 const EXCHANGE_TARGETS = { short: 14, medium: 26, long: 42 };
 const MAX_TOKENS_BY_LENGTH = { short: 1500, medium: 2800, long: 4200 };
+const DEFAULT_HOST_PERSONA_ID = 'alex-jamie';
+
+export const HOST_PERSONAS = [
+  {
+    id: DEFAULT_HOST_PERSONA_ID,
+    label: 'Alex & Jamie',
+    names: ['Alex', 'Jamie'],
+    firstRole: 'curious analyst',
+    secondRole: 'practical co-host',
+    voiceProfile: [
+      { pitch: 1.0, rate: 1.0, gender: 'neutral' },
+      { pitch: 1.15, rate: 1.0, gender: 'neutral' },
+    ],
+    dynamic:
+      'Alex is the curious analyst who frames the topic clearly; Jamie is the practical co-host who asks grounded follow-up questions.',
+  },
+  {
+    id: 'mara-theo',
+    label: 'Mara & Theo',
+    names: ['Mara', 'Theo'],
+    firstRole: 'skeptic',
+    secondRole: 'enthusiast',
+    voiceProfile: [
+      { pitch: 0.92, rate: 0.95, gender: 'female' },
+      { pitch: 1.2, rate: 1.08, gender: 'male' },
+    ],
+    dynamic:
+      'Mara is the skeptic who challenges easy claims and asks pointed follow-up questions; Theo is the enthusiast who brings examples and optimistic possibilities.',
+  },
+  {
+    id: 'sam-riya',
+    label: 'Sam & Riya',
+    names: ['Sam', 'Riya'],
+    firstRole: 'quick banter host',
+    secondRole: 'grounding co-host',
+    voiceProfile: [
+      { pitch: 1.05, rate: 1.05, gender: 'neutral' },
+      { pitch: 1.25, rate: 1.1, gender: 'female' },
+    ],
+    dynamic:
+      'Sam brings quick comedic banter and playful analogies; Riya keeps the jokes useful by tying them back to the real point.',
+  },
+  {
+    id: 'nina-cal',
+    label: 'Nina & Cal',
+    names: ['Nina', 'Cal'],
+    firstRole: 'measured explainer',
+    secondRole: 'story-driven tester',
+    voiceProfile: [
+      { pitch: 0.98, rate: 0.96, gender: 'female' },
+      { pitch: 1.12, rate: 1.03, gender: 'male' },
+    ],
+    dynamic:
+      'Nina is the measured explainer who likes structure and precise definitions; Cal is the story-driven co-host who tests ideas against everyday situations.',
+  },
+  {
+    id: 'ivy-marcus',
+    label: 'Ivy & Marcus',
+    names: ['Ivy', 'Marcus'],
+    firstRole: 'imaginative connector',
+    secondRole: 'careful realist',
+    voiceProfile: [
+      { pitch: 1.18, rate: 1.06, gender: 'female' },
+      { pitch: 0.94, rate: 0.97, gender: 'male' },
+    ],
+    dynamic:
+      'Ivy is the imaginative host who spots surprising connections; Marcus is the careful realist who asks what would actually happen next.',
+  },
+];
+
+export const HOST_VOICE_PROFILES = HOST_PERSONAS.reduce((profiles, persona) => {
+  profiles[persona.id] = {
+    id: persona.id,
+    names: persona.names,
+    voiceProfile: persona.voiceProfile,
+  };
+  profiles[persona.names.join('|')] = profiles[persona.id];
+  return profiles;
+}, {});
+const TONE_GUIDANCE = {
+  casual:
+    'For a casual tone, keep the language conversational and relaxed, with natural pauses in thought and easy back-and-forth reactions.',
+  formal:
+    'For a formal tone, use precise language, clear definitions, and minimal interruption between speakers. Let each host complete a focused point before the other responds.',
+  comedic:
+    'For a comedic tone, include a genuine joke, wry aside, or playful analogy that fits the topic. Do not rely only on casual phrasing to make it feel funny.',
+  dramatic:
+    'For a dramatic tone, build toward a specific reveal, tension point, or reversal in the middle of the episode. Keep the stakes clear without adding stage directions.',
+};
 
 // A generated episode is always an array of segments:
-// [{ speaker: 'Alex' | 'Jamie', text: '...' }, ...]
+// [{ speaker: 'Host name', text: '...' }, ...]
 // This shape is what both the transcript view and the two-voice player consume.
 
 function cleanLine(text) {
@@ -24,18 +113,43 @@ function cleanLine(text) {
 
 // ---------- Offline fallback: alternating two-host template ----------
 
-const HOSTS = ['Alex', 'Jamie'];
+const DEFAULT_HOST_PERSONA = HOST_PERSONAS[0];
 
 const OPENERS = [
   (t) => `Welcome back to Podwave. Today we're getting into ${t}.`,
   (t) => `Alright, let's talk about ${t} — this one's been on my mind.`,
   (t) => `So today's episode is all about ${t}. Should be a good one.`,
+  (t, tone) => `I keep seeing ${t} pop up in ${tone} conversations, so let's make sense of it.`,
+  (t) => `There is a version of ${t} that sounds simple, and then there is the version people actually deal with.`,
+  (t) => `Let's start with the question behind ${t}: why does it matter right now?`,
+  (t, tone, persona) => `${persona.names[0]} here, and I'm taking the ${persona.firstRole} chair today for a ${tone} look at ${t}.`,
+  (t) => `Before we pick a side on ${t}, let's slow down and define what we are really talking about.`,
 ];
 
 const REPLIES_TO_OPENER = [
   (t) => `Yeah, I've been wanting to dig into ${t} for a while now.`,
   (t) => `Honestly, ${t} is more interesting than people give it credit for.`,
   (t) => `I'm glad we're finally covering ${t}.`,
+  (t, tone, persona) => `Good, because I'm bringing the ${persona.secondRole} energy and a few examples.`,
+  (t) => `That framing matters, because people usually jump straight to the loudest opinion about ${t}.`,
+  (t) => `And I want us to get specific, because vague advice around ${t} is everywhere.`,
+  (t) => `Let's do it. I also want to challenge one assumption people keep making about ${t}.`,
+  () => `Perfect. The useful part is where the obvious answer starts to wobble.`,
+];
+
+const PERSONA_BRIDGES = [
+  [
+    (t, tone, persona) => `My ${persona.firstRole} instinct is to start by separating the useful version of ${t} from the noisy version.`,
+    (t, tone, persona) => `And my ${persona.secondRole} instinct is to test that against a situation someone might actually run into.`,
+  ],
+  [
+    (t, tone, persona) => `I want to approach ${t} from the ${persona.firstRole} side first, because the framing changes everything.`,
+    (t, tone, persona) => `Then I will take the ${persona.secondRole} side and push on where that framing might break down.`,
+  ],
+  [
+    (t, tone, persona) => `For a ${tone} episode, I think our roles matter here: I am going to keep asking what ${t} really means.`,
+    (t, tone, persona) => `And I am going to keep asking what someone should do with that answer once they have it.`,
+  ],
 ];
 
 const EXCHANGE_TEMPLATES = [
@@ -122,6 +236,22 @@ const CLOSERS = [
     (t) => `And that wraps up ${t}.`,
     () => `If this one helped, share it with someone who needs to hear it.`,
   ],
+  [
+    (t) => `So the takeaway on ${t} is not to memorize the perfect answer, but to notice the tradeoff.`,
+    () => `Exactly. Keep that question handy, and we will see you in the next episode.`,
+  ],
+  [
+    (t) => `That feels like a good place to leave ${t}: clearer, but not oversimplified.`,
+    () => `Thanks for listening to Podwave. Go try the practical version, not the perfect one.`,
+  ],
+  [
+    (t) => `If you only remember one thing about ${t}, remember the part that changes your next decision.`,
+    () => `That is the signal. Everything else is noise for another day.`,
+  ],
+  [
+    (t) => `We started with ${t} sounding straightforward, and ended with a more useful map of it.`,
+    () => `That is the job. Thanks for spending this one with us.`,
+  ],
 ];
 
 function pickExchangeTemplates(exchangeCount) {
@@ -138,23 +268,68 @@ function pickExchangeTemplates(exchangeCount) {
   return selected.slice(0, exchangeCount);
 }
 
-function fallbackDialogue(topic, tone, length) {
+function randomItem(items) {
+  return items[Math.floor(Math.random() * items.length)];
+}
+
+function normalizeHostName(name, fallback) {
+  return typeof name === 'string' && name.trim() ? name.trim().slice(0, 32) : fallback;
+}
+
+function resolveHostPersona(hosts) {
+  if (!hosts) return DEFAULT_HOST_PERSONA;
+
+  if (typeof hosts === 'string') {
+    return HOST_PERSONAS.find((persona) => persona.id === hosts || persona.label === hosts) || DEFAULT_HOST_PERSONA;
+  }
+
+  const requestedNames = Array.isArray(hosts) ? hosts : hosts.names;
+  if (!Array.isArray(requestedNames) || requestedNames.length < 2) return DEFAULT_HOST_PERSONA;
+
+  const names = [
+    normalizeHostName(requestedNames[0], DEFAULT_HOST_PERSONA.names[0]),
+    normalizeHostName(requestedNames[1], DEFAULT_HOST_PERSONA.names[1]),
+  ];
+
+  const builtInPersona = HOST_PERSONAS.find(
+    (persona) => persona.names[0] === names[0] && persona.names[1] === names[1]
+  );
+  if (builtInPersona) return builtInPersona;
+
+  return {
+    id: 'custom',
+    label: `${names[0]} & ${names[1]}`,
+    names,
+    firstRole: 'curious host',
+    secondRole: 'grounded co-host',
+    voiceProfile: DEFAULT_HOST_PERSONA.voiceProfile,
+    dynamic: `${names[0]} is the curious host who opens up the topic; ${names[1]} is the grounded co-host who asks follow-up questions and keeps the conversation useful.`,
+  };
+}
+
+function fallbackDialogue(topic, tone, length, hostPersona = DEFAULT_HOST_PERSONA) {
   const exchangeCount = { short: 7, medium: 13, long: 21 }[length] || 13;
   const shuffled = pickExchangeTemplates(exchangeCount);
-  const closer = CLOSERS[Math.floor(Math.random() * CLOSERS.length)];
+  const opener = randomItem(OPENERS);
+  const replyToOpener = randomItem(REPLIES_TO_OPENER);
+  const personaBridge = randomItem(PERSONA_BRIDGES);
+  const closer = randomItem(CLOSERS);
+  const [firstHost, secondHost] = hostPersona.names;
 
   const segments = [
-    { speaker: HOSTS[0], text: OPENERS[0](topic) },
-    { speaker: HOSTS[1], text: REPLIES_TO_OPENER[0](topic) },
+    { speaker: firstHost, text: opener(topic, tone, hostPersona) },
+    { speaker: secondHost, text: replyToOpener(topic, tone, hostPersona) },
+    { speaker: firstHost, text: personaBridge[0](topic, tone, hostPersona) },
+    { speaker: secondHost, text: personaBridge[1](topic, tone, hostPersona) },
   ];
 
   shuffled.forEach(([a, b]) => {
-    segments.push({ speaker: HOSTS[0], text: a(topic, tone) });
-    segments.push({ speaker: HOSTS[1], text: b(topic, tone) });
+    segments.push({ speaker: firstHost, text: a(topic, tone, hostPersona) });
+    segments.push({ speaker: secondHost, text: b(topic, tone, hostPersona) });
   });
 
-  segments.push({ speaker: HOSTS[0], text: closer[0](topic) });
-  segments.push({ speaker: HOSTS[1], text: closer[1](topic) });
+  segments.push({ speaker: firstHost, text: closer[0](topic, tone, hostPersona) });
+  segments.push({ speaker: secondHost, text: closer[1](topic, tone, hostPersona) });
 
   return segments;
 }
@@ -170,7 +345,7 @@ export function estimateDurationMinutes(length) {
   return `~${lower}-${upper} min`;
 }
 
-export async function generateScript({ topic, tone, length }) {
+export async function generateScript({ topic, tone, length, hosts } = {}) {
   const cleanTopic = typeof topic === 'string' ? topic.trim() : '';
   if (cleanTopic.length < 3) {
     throw new Error('A topic with at least 3 characters is required.');
@@ -182,10 +357,14 @@ export async function generateScript({ topic, tone, length }) {
     throw new Error('The selected tone or length is not valid.');
   }
 
+  const hostPersona = resolveHostPersona(hosts);
+  const [firstHost, secondHost] = hostPersona.names;
+  const toneGuidance = TONE_GUIDANCE[tone] || TONE_GUIDANCE.casual;
+
   if (!GROQ_API_KEY) {
     // Simulate network delay so loading states are demoable.
     await new Promise((r) => setTimeout(r, 900));
-    return fallbackDialogue(cleanTopic, tone, length);
+    return fallbackDialogue(cleanTopic, tone, length, hostPersona);
   }
 
   const exchangeTarget = EXCHANGE_TARGETS[length] || EXCHANGE_TARGETS.medium;
@@ -203,19 +382,24 @@ export async function generateScript({ topic, tone, length }) {
             'You write two-host podcast dialogue that gets fed directly into a text-to-speech engine, one line at a time. ' +
             'Respond with ONLY valid JSON, no markdown fences, no explanation text before or after. ' +
             'Use exactly this shape, with the key "segments" at the top level: ' +
-            '{"segments":[{"speaker":"Alex","text":"Welcome back to the show."},{"speaker":"Jamie","text":"Glad to be here."}]}. ' +
-            'Always alternate between exactly two speakers named "Alex" and "Jamie", starting with Alex. ' +
+            `{"segments":[{"speaker":"${firstHost}","text":"Let's start with the real question."},{"speaker":"${secondHost}","text":"Good, because there is more to it than the obvious answer."}]}. ` +
+            `Always alternate between exactly two speakers named "${firstHost}" and "${secondHost}", starting with ${firstHost}. ` +
+            `Host dynamic: ${hostPersona.dynamic} Let this relationship shape the questions, pushback, examples, and rhythm of the conversation. ` +
             `The conversation must contain at least ${exchangeTarget} lines total - do not stop early. ` +
             'Build a clear intro, then 2-3 distinct sub-topics, then a wrap-up. ' +
             'Make the content substantive and specific, with concrete examples, a brief mini-anecdote, ' +
             'a counterpoint or disagreement between the hosts, and practical takeaways instead of repetitive filler. ' +
+            'Avoid using the same generic podcast-intro phrasing every time, especially "Welcome back to the show." ' +
+            'Open in a way that fits the topic, tone, and host dynamic. ' +
+            toneGuidance +
+            ' ' +
             'Each "text" value must be plain spoken words only — no stage directions, no sound cues like [music], ' +
             'no asterisks, no markdown, no emoji. Make it sound like a natural back-and-forth conversation, ' +
             'with each host reacting to what the other just said, not just alternating monologues.',
         },
         {
           role: 'user',
-          content: `Write a ${tone} two-host podcast conversation about "${cleanTopic}" with at least ${exchangeTarget} total lines of dialogue.`,
+          content: `Write a ${tone} two-host podcast conversation about "${cleanTopic}" with at least ${exchangeTarget} total lines of dialogue. The hosts are ${firstHost} and ${secondHost}.`,
         },
       ],
       max_tokens: maxTokens,

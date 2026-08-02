@@ -7,6 +7,7 @@ import Create from './pages/Create';
 import Library from './pages/Library';
 import EpisodeDetail from './pages/EpisodeDetail';
 import Dashboard from './pages/Dashboard';
+import SharedEpisode from './pages/SharedEpisode';
 
 export default function App() {
   return (
@@ -16,6 +17,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/login" element={<Login />} />
+          <Route path="/shared" element={<SharedEpisode />} />
           <Route path="/create" element={<ProtectedRoute><Create /></ProtectedRoute>} />
           <Route path="/library" element={<ProtectedRoute><Library /></ProtectedRoute>} />
           <Route path="/episode/:id" element={<ProtectedRoute><EpisodeDetail /></ProtectedRoute>} />

@@ -62,7 +62,7 @@ export default function Navbar() {
             aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}
             variant="outlined"
             size="small"
-            sx={{ color: 'text.secondary', borderColor: 'divider', minWidth: 0 }}
+            sx={{ minWidth: 0 }}
           >
             {theme === 'dark' ? '☀ light' : '● dark'}
           </Button>

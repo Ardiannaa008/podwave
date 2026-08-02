@@ -1,11 +1,30 @@
 const KEY_PREFIX = 'podwave_episodes_';
 
+function normalizeTags(tags) {
+  if (!Array.isArray(tags)) return [];
+  return tags
+    .filter((tag) => typeof tag === 'string')
+    .map((tag) => tag.trim())
+    .filter(Boolean);
+}
+
+function normalizeEpisode(episode) {
+  return {
+    ...episode,
+    tags: normalizeTags(episode.tags),
+  };
+}
+
 export function getEpisodes(username) {
   try {
     const raw = localStorage.getItem(KEY_PREFIX + username);
     const parsed = raw ? JSON.parse(raw) : [];
     // Valid JSON is not necessarily the array shape the app expects.
-    return Array.isArray(parsed) ? parsed.filter((episode) => episode && typeof episode === 'object') : [];
+    return Array.isArray(parsed)
+      ? parsed
+          .filter((episode) => episode && typeof episode === 'object')
+          .map(normalizeEpisode)
+      : [];
   } catch {
     // Corrupted JSON in localStorage — fail safe with an empty library
     // rather than crashing the whole page.
@@ -15,7 +34,7 @@ export function getEpisodes(username) {
 
 export function saveEpisode(username, episode) {
   const episodes = getEpisodes(username);
-  episodes.unshift(episode);
+  episodes.unshift(normalizeEpisode(episode));
   try {
     localStorage.setItem(KEY_PREFIX + username, JSON.stringify(episodes));
   } catch {

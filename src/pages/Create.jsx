@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import {
   Alert,
   Button,
@@ -10,7 +10,7 @@ import {
   TextField,
 } from '@mui/material';
 import { useAuth } from '../context/AuthContext';
-import { estimateDurationMinutes, generateScript } from '../utils/scriptGenerator';
+import { HOST_PERSONAS, estimateDurationMinutes, generateScript } from '../utils/scriptGenerator';
 import { saveEpisode } from '../utils/storage';
 import FieldGroup from '../components/FieldGroup';
 import AudioPlayer from '../components/AudioPlayer';
@@ -18,6 +18,36 @@ import Transcript from '../components/Transcript';
 
 const TONES = ['casual', 'formal', 'comedic', 'dramatic'];
 const LENGTHS = ['short', 'medium', 'long'];
+
+function parseTags(value) {
+  const seen = new Set();
+  return String(value || '')
+    .split(',')
+    .map((tag) => tag.trim())
+    .filter(Boolean)
+    .map((tag) => tag.slice(0, 24))
+    .filter((tag) => {
+      const key = tag.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+function findPersonaId(prefill) {
+  if (HOST_PERSONAS.some((persona) => persona.id === prefill?.hostPersonaId)) {
+    return prefill.hostPersonaId;
+  }
+
+  if (Array.isArray(prefill?.hosts) && prefill.hosts.length >= 2) {
+    const match = HOST_PERSONAS.find(
+      (persona) => persona.names[0] === prefill.hosts[0] && persona.names[1] === prefill.hosts[1]
+    );
+    if (match) return match.id;
+  }
+
+  return HOST_PERSONAS[0].id;
+}
 
 function makeId() {
   return typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
@@ -29,12 +59,31 @@ export default function Create() {
   const [topic, setTopic] = useState('');
   const [tone, setTone] = useState('casual');
   const [length, setLength] = useState('medium');
+  const [hostPersonaId, setHostPersonaId] = useState(HOST_PERSONAS[0].id);
+  const [tagInput, setTagInput] = useState('');
   const [voiceRate, setVoiceRate] = useState(1);
   const [segments, setSegments] = useState(null);
+  const [generatedHostPersona, setGeneratedHostPersona] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const { user } = useAuth();
+  const location = useLocation();
   const navigate = useNavigate();
+  const selectedHostPersona =
+    HOST_PERSONAS.find((persona) => persona.id === hostPersonaId) || HOST_PERSONAS[0];
+
+  useEffect(() => {
+    const prefill = location.state?.prefill;
+    if (!prefill || typeof prefill !== 'object') return;
+
+    if (typeof prefill.topic === 'string') setTopic(prefill.topic.slice(0, 180));
+    if (TONES.includes(prefill.tone)) setTone(prefill.tone);
+    if (LENGTHS.includes(prefill.length)) setLength(prefill.length);
+    setHostPersonaId(findPersonaId(prefill));
+    setTagInput(Array.isArray(prefill.tags) ? prefill.tags.join(', ') : '');
+    setSegments(null);
+    setGeneratedHostPersona(null);
+  }, [location.state]);
 
   async function handleGenerate(e) {
     e.preventDefault();
@@ -45,9 +94,11 @@ export default function Create() {
     setError('');
     setLoading(true);
     setSegments(null);
+    setGeneratedHostPersona(null);
     try {
-      const result = await generateScript({ topic, tone, length });
+      const result = await generateScript({ topic, tone, length, hosts: selectedHostPersona.names });
       setSegments(result);
+      setGeneratedHostPersona(selectedHostPersona);
     } catch (err) {
       setError(err?.message || 'Script generation failed. Check your connection or API key.');
     } finally {
@@ -68,6 +119,9 @@ export default function Create() {
       topic,
       tone,
       length,
+      hosts: generatedHostPersona?.names || selectedHostPersona.names,
+      hostPersonaId: generatedHostPersona?.id || selectedHostPersona.id,
+      tags: parseTags(tagInput),
       segments,
       script: combinedScript,
       wordCount: segments.reduce((sum, s) => sum + s.text.split(/\s+/).length, 0),
@@ -105,6 +159,33 @@ export default function Create() {
               inputProps={{ 'aria-label': 'Tone' }}
             >
               {TONES.map((t) => <MenuItem key={t} value={t}>{t}</MenuItem>)}
+            </Select>
+          </FormControl>
+        </FieldGroup>
+
+        <FieldGroup label="TAGS">
+          <TextField
+            value={tagInput}
+            onChange={(e) => setTagInput(e.target.value)}
+            placeholder="e.g. AI, leadership, tutorial"
+            size="small"
+            fullWidth
+            inputProps={{ 'aria-label': 'Tags' }}
+          />
+        </FieldGroup>
+
+        <FieldGroup label="HOSTS">
+          <FormControl size="small" fullWidth>
+            <Select
+              value={hostPersonaId}
+              onChange={(e) => setHostPersonaId(e.target.value)}
+              inputProps={{ 'aria-label': 'Hosts' }}
+            >
+              {HOST_PERSONAS.map((persona) => (
+                <MenuItem key={persona.id} value={persona.id}>
+                  {persona.label} - {persona.firstRole} / {persona.secondRole}
+                </MenuItem>
+              ))}
             </Select>
           </FormControl>
         </FieldGroup>
@@ -169,7 +250,12 @@ export default function Create() {
             <h4 style={{ marginBottom: 14 }}>Transcript preview</h4>
             <Transcript segments={segments} />
           </div>
-          <AudioPlayer segments={segments} voiceRate={voiceRate} />
+          <AudioPlayer
+            segments={segments}
+            voiceRate={voiceRate}
+            hosts={generatedHostPersona?.names}
+            hostPersonaId={generatedHostPersona?.id}
+          />
           <Button
             onClick={handleSaveEpisode}
             variant="contained"

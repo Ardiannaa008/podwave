@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useNavigate, useParams, Link } from 'react-router-dom';
 import { Box, Button, Skeleton } from '@mui/material';
 import { useAuth } from '../context/AuthContext';
 import { getEpisode } from '../utils/storage';
@@ -10,6 +10,8 @@ export default function EpisodeDetail() {
   const { id } = useParams();
   const { user } = useAuth();
   const [episode, setEpisode] = useState(undefined);
+  const [shareStatus, setShareStatus] = useState('');
+  const navigate = useNavigate();
 
   useEffect(() => {
     if (user) setEpisode(getEpisode(user.username, id) || null);
@@ -53,6 +55,62 @@ export default function EpisodeDetail() {
   const segments = Array.isArray(episode.segments) && episode.segments.length > 0
     ? episode.segments
     : [{ speaker: 'Narrator', text: typeof episode.script === 'string' ? episode.script : '' }];
+  const tags = Array.isArray(episode.tags)
+    ? episode.tags.filter((tag) => typeof tag === 'string' && tag.trim())
+    : [];
+
+  function handleRemix() {
+    navigate('/create', {
+      state: {
+        prefill: {
+          topic: episode.topic,
+          tone: episode.tone,
+          length: episode.length,
+          hosts: episode.hosts,
+          hostPersonaId: episode.hostPersonaId,
+          tags,
+        },
+      },
+    });
+  }
+
+  function handleExportTranscript() {
+    const transcript = segments.map((seg) => `${seg.speaker}: ${seg.text}`).join('\n');
+    const blob = new Blob([transcript], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    const safeTitle = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'podwave-transcript';
+
+    link.href = url;
+    link.download = `${safeTitle}.txt`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  async function handleCopyShareLink() {
+    try {
+      const payload = {
+        topic: episode.topic,
+        tone: episode.tone,
+        hosts: episode.hosts,
+        hostPersonaId: episode.hostPersonaId,
+        segments,
+      };
+      const encoded = encodeSharePayload(payload);
+      if (encoded.length > 120000) {
+        setShareStatus('This episode is too large to fit into a share link.');
+        return;
+      }
+
+      const shareUrl = `${window.location.origin}/shared?data=${encodeURIComponent(encoded)}`;
+      await copyToClipboard(shareUrl);
+      setShareStatus('Share link copied.');
+    } catch {
+      setShareStatus('Could not create a share link for this episode.');
+    }
+  }
 
   return (
     <div className="page" style={{ maxWidth: 640 }}>
@@ -62,7 +120,36 @@ export default function EpisodeDetail() {
         {tone} · {length} · {dateLabel}
       </p>
 
-      <AudioPlayer segments={segments} />
+      {tags.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 20 }}>
+          {tags.map((tag) => (
+            <span key={tag} className="pill">{tag}</span>
+          ))}
+        </div>
+      )}
+
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginBottom: 20 }}>
+        <Button onClick={handleRemix} variant="contained">
+          Remix
+        </Button>
+        <Button onClick={handleExportTranscript} variant="outlined">
+          Export transcript
+        </Button>
+        <Button onClick={handleCopyShareLink} variant="outlined">
+          Copy share link
+        </Button>
+      </div>
+      {shareStatus && (
+        <p className="mono muted" style={{ marginTop: -8, marginBottom: 20, fontSize: 12 }}>
+          {shareStatus}
+        </p>
+      )}
+
+      <AudioPlayer
+        segments={segments}
+        hosts={episode.hosts}
+        hostPersonaId={episode.hostPersonaId}
+      />
 
       <div className="panel" style={{ marginTop: 20 }}>
         <h4 style={{ marginBottom: 14 }}>Transcript</h4>
@@ -70,4 +157,31 @@ export default function EpisodeDetail() {
       </div>
     </div>
   );
+}
+
+function encodeSharePayload(payload) {
+  const json = JSON.stringify(payload);
+  const bytes = new TextEncoder().encode(json);
+  let binary = '';
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte);
+  });
+  return btoa(binary);
+}
+
+async function copyToClipboard(text) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', '');
+  textarea.style.position = 'fixed';
+  textarea.style.left = '-9999px';
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand('copy');
+  textarea.remove();
 }
