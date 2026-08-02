@@ -10,7 +10,7 @@ import {
   TextField,
 } from '@mui/material';
 import { useAuth } from '../context/AuthContext';
-import { generateScript } from '../utils/scriptGenerator';
+import { estimateDurationMinutes, generateScript } from '../utils/scriptGenerator';
 import { saveEpisode } from '../utils/storage';
 import FieldGroup from '../components/FieldGroup';
 import AudioPlayer from '../components/AudioPlayer';
@@ -116,7 +116,11 @@ export default function Create() {
               onChange={(e) => setLength(e.target.value)}
               inputProps={{ 'aria-label': 'Length' }}
             >
-              {LENGTHS.map((l) => <MenuItem key={l} value={l}>{l}</MenuItem>)}
+              {LENGTHS.map((l) => (
+                <MenuItem key={l} value={l}>
+                  {l} ({estimateDurationMinutes(l)})
+                </MenuItem>
+              ))}
             </Select>
           </FormControl>
         </FieldGroup>

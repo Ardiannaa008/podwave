@@ -5,7 +5,9 @@ const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
 const VALID_TONES = ['casual', 'formal', 'comedic', 'dramatic'];
 const VALID_LENGTHS = ['short', 'medium', 'long'];
 const MAX_TOPIC_LENGTH = 180;
-const MAX_SEGMENTS = 60;
+const MAX_SEGMENTS = 120;
+const EXCHANGE_TARGETS = { short: 14, medium: 26, long: 42 };
+const MAX_TOKENS_BY_LENGTH = { short: 1500, medium: 2800, long: 4200 };
 
 // A generated episode is always an array of segments:
 // [{ speaker: 'Alex' | 'Jamie', text: '...' }, ...]
@@ -61,6 +63,54 @@ const EXCHANGE_TEMPLATES = [
     (t) => `What's interesting is how much ${t} has changed in the last couple of years.`,
     (t) => `Yeah, it barely resembles what it used to be.`,
   ],
+  [
+    (t) => `A personal example helps here: I remember first running into ${t} and realizing the easy answer was missing half the story.`,
+    (t) => `That's the kind of moment where the topic stops being abstract and starts feeling practical.`,
+  ],
+  [
+    (t) => `Here's the counterexample, though: sometimes ${t} gets worse when people try to optimize it too early.`,
+    (t) => `I agree, and that's a good reminder that more effort is not always the same as better judgment.`,
+  ],
+  [
+    (t) => `Let's zoom out for a second, because ${t} is really connected to incentives, habits, and how people make tradeoffs.`,
+    (t) => `Exactly. The bigger pattern matters as much as the individual decision.`,
+  ],
+  [
+    (t) => `If a listener asked where to start with ${t}, I would tell them to notice the first point where things feel confusing.`,
+    (t) => `That's useful because confusion usually points to the assumption that needs to be made visible.`,
+  ],
+  [
+    (t) => `One underrated part of ${t} is knowing what not to do.`,
+    (t) => `Yes, avoiding the common traps can move you forward faster than chasing every advanced trick.`,
+  ],
+  [
+    (t) => `The practical test for ${t} is whether it changes what someone actually does tomorrow.`,
+    (t) => `That's a high bar, but it keeps the conversation grounded instead of theoretical.`,
+  ],
+  [
+    (t) => `I want to push back slightly, because ${t} can sound neat in theory and still get messy in real life.`,
+    (t) => `That's true. The messy version is usually where the most useful lessons are hiding.`,
+  ],
+  [
+    (t) => `Another angle is the emotional side of ${t}, because people rarely make these choices like spreadsheets.`,
+    (t) => `Right, there is usually anxiety, pride, curiosity, or pressure mixed into the decision.`,
+  ],
+  [
+    (t) => `A useful way to explain ${t} is to separate the signal from the noise.`,
+    (t) => `And once you do that, the next step usually becomes much easier to see.`,
+  ],
+  [
+    (t) => `The part of ${t} that deserves more attention is the boring middle, where consistency matters more than insight.`,
+    (t) => `That is where most people either build momentum or quietly drift away from the goal.`,
+  ],
+  [
+    (t) => `There is also a timing question with ${t}: when do you act, and when do you keep learning?`,
+    (t) => `That tension is real, because waiting too long and moving too fast can both create problems.`,
+  ],
+  [
+    (t) => `One question I would leave people with is what ${t} looks like when it is done well, not perfectly.`,
+    (t) => `That distinction matters. Perfect is intimidating, but well-done is something people can actually aim for.`,
+  ],
 ];
 
 const CLOSERS = [
@@ -74,9 +124,23 @@ const CLOSERS = [
   ],
 ];
 
+function pickExchangeTemplates(exchangeCount) {
+  const selected = [];
+
+  while (selected.length < exchangeCount) {
+    const batch = [...EXCHANGE_TEMPLATES].sort(() => Math.random() - 0.5);
+    if (selected.length > 0 && batch[0] === selected[selected.length - 1]) {
+      batch.push(batch.shift());
+    }
+    selected.push(...batch);
+  }
+
+  return selected.slice(0, exchangeCount);
+}
+
 function fallbackDialogue(topic, tone, length) {
-  const exchangeCount = { short: 2, medium: 4, long: 6 }[length] || 4;
-  const shuffled = [...EXCHANGE_TEMPLATES].sort(() => Math.random() - 0.5).slice(0, exchangeCount);
+  const exchangeCount = { short: 7, medium: 13, long: 21 }[length] || 13;
+  const shuffled = pickExchangeTemplates(exchangeCount);
   const closer = CLOSERS[Math.floor(Math.random() * CLOSERS.length)];
 
   const segments = [
@@ -97,6 +161,15 @@ function fallbackDialogue(topic, tone, length) {
 
 // ---------- Real AI generation via Groq, returned as JSON segments ----------
 
+export function estimateDurationMinutes(length) {
+  const safeLength = VALID_LENGTHS.includes(length) ? length : 'medium';
+  const estimatedMinutes = (EXCHANGE_TARGETS[safeLength] * 18) / 130;
+  const lower = Math.max(1, Math.round(estimatedMinutes));
+  const upper = Math.max(lower + 1, Math.ceil(estimatedMinutes + 1));
+
+  return `~${lower}-${upper} min`;
+}
+
 export async function generateScript({ topic, tone, length }) {
   const cleanTopic = typeof topic === 'string' ? topic.trim() : '';
   if (cleanTopic.length < 3) {
@@ -115,7 +188,8 @@ export async function generateScript({ topic, tone, length }) {
     return fallbackDialogue(cleanTopic, tone, length);
   }
 
-  const exchangeTarget = { short: 6, medium: 12, long: 20 }[length] || 12;
+  const exchangeTarget = EXCHANGE_TARGETS[length] || EXCHANGE_TARGETS.medium;
+  const maxTokens = MAX_TOKENS_BY_LENGTH[length] || MAX_TOKENS_BY_LENGTH.medium;
 
   const response = await axios.post(
     GROQ_URL,
@@ -131,18 +205,23 @@ export async function generateScript({ topic, tone, length }) {
             'Use exactly this shape, with the key "segments" at the top level: ' +
             '{"segments":[{"speaker":"Alex","text":"Welcome back to the show."},{"speaker":"Jamie","text":"Glad to be here."}]}. ' +
             'Always alternate between exactly two speakers named "Alex" and "Jamie", starting with Alex. ' +
+            `The conversation must contain at least ${exchangeTarget} lines total - do not stop early. ` +
+            'Build a clear intro, then 2-3 distinct sub-topics, then a wrap-up. ' +
+            'Make the content substantive and specific, with concrete examples, a brief mini-anecdote, ' +
+            'a counterpoint or disagreement between the hosts, and practical takeaways instead of repetitive filler. ' +
             'Each "text" value must be plain spoken words only — no stage directions, no sound cues like [music], ' +
             'no asterisks, no markdown, no emoji. Make it sound like a natural back-and-forth conversation, ' +
             'with each host reacting to what the other just said, not just alternating monologues.',
         },
         {
           role: 'user',
-          content: `Write a ${tone} two-host podcast conversation about "${cleanTopic}" with roughly ${exchangeTarget} total lines of dialogue.`,
+          content: `Write a ${tone} two-host podcast conversation about "${cleanTopic}" with at least ${exchangeTarget} total lines of dialogue.`,
         },
       ],
+      max_tokens: maxTokens,
     },
     {
-      timeout: 25000,
+      timeout: 45000,
       headers: {
         Authorization: `Bearer ${GROQ_API_KEY}`,
         'Content-Type': 'application/json',
