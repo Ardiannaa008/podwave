@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
 import { Box, Button, Skeleton } from '@mui/material';
+import { compressToEncodedURIComponent } from 'lz-string';
 import { useAuth } from '../context/AuthContext';
 import { getEpisode } from '../utils/storage';
 import AudioPlayer from '../components/AudioPlayer';
@@ -104,7 +105,7 @@ export default function EpisodeDetail() {
         return;
       }
 
-      const shareUrl = `${window.location.origin}/shared?data=${encodeURIComponent(encoded)}`;
+      const shareUrl = `${window.location.origin}/shared?data=${encoded}`;
       await copyToClipboard(shareUrl);
       setShareStatus('Share link copied.');
     } catch {
@@ -160,13 +161,7 @@ export default function EpisodeDetail() {
 }
 
 function encodeSharePayload(payload) {
-  const json = JSON.stringify(payload);
-  const bytes = new TextEncoder().encode(json);
-  let binary = '';
-  bytes.forEach((byte) => {
-    binary += String.fromCharCode(byte);
-  });
-  return btoa(binary);
+  return compressToEncodedURIComponent(JSON.stringify(payload));
 }
 
 async function copyToClipboard(text) {

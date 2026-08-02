@@ -1,5 +1,6 @@
 import { Link, useSearchParams } from 'react-router-dom';
 import { Button } from '@mui/material';
+import { decompressFromEncodedURIComponent } from 'lz-string';
 import AudioPlayer from '../components/AudioPlayer';
 import Transcript from '../components/Transcript';
 
@@ -54,9 +55,7 @@ function decodeSharedEpisode(data) {
   try {
     if (!data || data.length > MAX_SHARE_DATA_LENGTH) return null;
 
-    const binary = atob(data);
-    const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
-    const parsed = JSON.parse(new TextDecoder().decode(bytes));
+    const parsed = parseShareData(data);
     const segments = normalizeSegments(parsed?.segments);
 
     if (segments.length === 0) return null;
@@ -71,6 +70,15 @@ function decodeSharedEpisode(data) {
   } catch {
     return null;
   }
+}
+
+function parseShareData(data) {
+  const decompressed = decompressFromEncodedURIComponent(data);
+  if (decompressed) return JSON.parse(decompressed);
+
+  const binary = atob(data);
+  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+  return JSON.parse(new TextDecoder().decode(bytes));
 }
 
 function normalizeSegments(segments) {
