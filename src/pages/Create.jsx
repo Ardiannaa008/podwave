@@ -135,7 +135,7 @@ export default function Create() {
     <div className="page" style={{ maxWidth: 640 }}>
       <h2>Create an episode</h2>
       <p className="muted" style={{ marginBottom: 24 }}>
-        Describe a topic, pick a tone and length, and Podwave writes a two-host
+        Describe the topic, pick a tone and length, and Podwave writes a two-host
         conversation about it and reads it aloud with two different voices.
       </p>
 
