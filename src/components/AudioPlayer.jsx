@@ -303,13 +303,14 @@ export default function AudioPlayer({ segments, voiceRate = 1, hosts, hostPerson
   }, [speechSupported]);
 
   useEffect(() => {
+    const audio = audioRef.current;
     return () => {
       playSessionRef.current += 1;
       geminiAbortRef.current?.abort();
       if (speechSupported) window.speechSynthesis.cancel();
-      if (audioRef.current) {
-        audioRef.current.pause();
-        audioRef.current.src = '';
+      if (audio) {
+        audio.pause();
+        audio.src = '';
       }
       if (generatedAudioRef.current?.objectUrl) {
         URL.revokeObjectURL(generatedAudioRef.current.objectUrl);
