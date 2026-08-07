@@ -9,7 +9,7 @@ const GEMINI_TTS_MODELS = [
 const SAMPLE_RATE = 24000;
 const CHANNEL_COUNT = 1;
 const BYTES_PER_SAMPLE = 2;
-const GEMINI_TTS_TIMEOUT_MS = 15000;
+const GEMINI_TTS_TIMEOUT_MS = 90000;
 
 const GEMINI_VOICES = {
   female: ['Aoede', 'Leda', 'Laomedeia', 'Autonoe', 'Achernar', 'Vindemiatrix'],

@@ -3,9 +3,6 @@ import { Alert, Button } from '@mui/material';
 import { HOST_VOICE_PROFILES } from '../utils/scriptGenerator';
 import { generateEpisodeAudio } from '../utils/ttsGemini';
 
-const GEMINI_QUOTA_COOLDOWN_KEY = 'podwave_gemini_quota_cooldown_until';
-const GEMINI_QUOTA_COOLDOWN_MS = 10 * 60 * 1000;
-
 // Splits one segment's text into small chunks, because some browsers stop a
 // single SpeechSynthesisUtterance before a long passage has finished.
 function splitIntoSpeechChunks(text, maxLength = 220) {
@@ -221,40 +218,6 @@ function buildPlayQueue(segments, voiceMap, baseRate) {
   return queue;
 }
 
-function getGeminiQuotaCooldown() {
-  try {
-    const value = Number(sessionStorage.getItem(GEMINI_QUOTA_COOLDOWN_KEY));
-    return Number.isFinite(value) ? value : 0;
-  } catch {
-    return 0;
-  }
-}
-
-function rememberGeminiQuotaCooldown() {
-  try {
-    sessionStorage.setItem(GEMINI_QUOTA_COOLDOWN_KEY, String(Date.now() + GEMINI_QUOTA_COOLDOWN_MS));
-  } catch {
-    // If sessionStorage is blocked, the next play can simply try Gemini again.
-  }
-}
-
-function clearGeminiQuotaCooldown() {
-  try {
-    sessionStorage.removeItem(GEMINI_QUOTA_COOLDOWN_KEY);
-  } catch {
-    // Nothing to clear when storage is blocked.
-  }
-}
-
-function hasGeminiQuotaCooldown() {
-  const cooldownUntil = getGeminiQuotaCooldown();
-  if (!cooldownUntil) return false;
-  if (cooldownUntil > Date.now()) return true;
-
-  clearGeminiQuotaCooldown();
-  return false;
-}
-
 export default function AudioPlayer({ segments, voiceRate = 1, hosts, hostPersonaId, tone }) {
   const audioRef = useRef(null);
   const generatedAudioRef = useRef(null);
@@ -266,7 +229,7 @@ export default function AudioPlayer({ segments, voiceRate = 1, hosts, hostPerson
   const [speechError, setSpeechError] = useState('');
   const [narrationNotice, setNarrationNotice] = useState('');
   const [fallbackReason, setFallbackReason] = useState('');
-  const [playbackMode, setPlaybackMode] = useState('browser'); // gemini | browser
+  const [playbackMode, setPlaybackMode] = useState('gemini'); // gemini | browser
   const [voicesReady, setVoicesReady] = useState(false);
   const [currentSpeaker, setCurrentSpeaker] = useState(null);
 
@@ -382,11 +345,6 @@ export default function AudioPlayer({ segments, voiceRate = 1, hosts, hostPerson
       playGeneratedAudio(generatedAudioRef.current.objectUrl);
       return;
     }
-    if (hasGeminiQuotaCooldown()) {
-      setFallbackReason('Browser voices are active. Gemini quota is unavailable for a few minutes.');
-      playBrowserFallback();
-      return;
-    }
 
     const requestSession = playSessionRef.current + 1;
     playSessionRef.current = requestSession;
@@ -417,13 +375,14 @@ export default function AudioPlayer({ segments, voiceRate = 1, hosts, hostPerson
       if (requestSession !== playSessionRef.current) return;
       const fallbackMessage =
         error?.code === 'RATE_LIMIT'
-          ? 'Browser voices are active. Gemini quota is unavailable for a few minutes.'
+          ? 'Gemini quota is unavailable right now. You can try Gemini again, or use browser voices manually.'
           : error?.code === 'TIMEOUT'
-            ? "Gemini narration is taking too long - using your browser's built-in voices instead."
-          : "Using your browser's built-in voices - couldn't reach the higher-quality narration service.";
-      if (error?.code === 'RATE_LIMIT') rememberGeminiQuotaCooldown();
-      setFallbackReason(fallbackMessage);
-      playBrowserFallback();
+            ? 'Gemini narration is still taking too long. You can keep trying Gemini, or use browser voices manually.'
+            : "Gemini narration couldn't be generated. You can try again, or use browser voices manually.";
+      setNarrationNotice(fallbackMessage);
+      setStatus('idle');
+      setPlaybackMode('gemini');
+      setCurrentSpeaker(null);
     } finally {
       if (geminiAbortRef.current === controller) {
         geminiAbortRef.current = null;
@@ -447,14 +406,16 @@ export default function AudioPlayer({ segments, voiceRate = 1, hosts, hostPerson
       setCurrentSpeaker(null);
     };
     audioRef.current.onerror = () => {
-      setFallbackReason("Using your browser's built-in voices - couldn't play the generated narration.");
-      playBrowserFallback();
+      setNarrationNotice("Gemini narration was generated, but the browser couldn't play the audio file.");
+      setStatus('idle');
+      setCurrentSpeaker(null);
     };
     audioRef.current.play().then(() => {
       setStatus('playing');
     }).catch(() => {
-      setFallbackReason("Using your browser's built-in voices - couldn't play the generated narration.");
-      playBrowserFallback();
+      setNarrationNotice("Gemini narration was generated, but the browser couldn't start playback.");
+      setStatus('idle');
+      setCurrentSpeaker(null);
     });
   }
 
@@ -510,14 +471,9 @@ export default function AudioPlayer({ segments, voiceRate = 1, hosts, hostPerson
     geminiAbortRef.current?.abort();
     geminiAbortRef.current = null;
     playSessionRef.current += 1;
+    setNarrationNotice('');
     setFallbackReason("Using your browser's built-in voices for immediate playback.");
     playBrowserFallback();
-  }
-
-  function tryGeminiAgain() {
-    clearGeminiQuotaCooldown();
-    stop();
-    window.setTimeout(() => play(), 0);
   }
 
   function stop() {
@@ -540,9 +496,14 @@ export default function AudioPlayer({ segments, voiceRate = 1, hosts, hostPerson
         </span>
 
         {status === 'idle' && (
-          <Button onClick={play} variant="contained" disabled={cleanSegments.length === 0}>
-            ▶ Play episode
-          </Button>
+          <>
+            <Button onClick={play} variant="contained" disabled={cleanSegments.length === 0}>
+              Play with Gemini
+            </Button>
+            <Button onClick={useBrowserVoicesNow} variant="outlined" disabled={cleanSegments.length === 0 || !speechSupported}>
+              Use browser voices
+            </Button>
+          </>
         )}
         {status === 'generating' && (
           <>
@@ -585,16 +546,9 @@ export default function AudioPlayer({ segments, voiceRate = 1, hosts, hostPerson
       )}
 
       {status === 'playing' && playbackMode === 'browser' && fallbackReason && (
-        <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-          <span className="mono muted" style={{ fontSize: 12 }}>
-            {fallbackReason}
-          </span>
-          {fallbackReason.includes('quota') && (
-            <Button onClick={tryGeminiAgain} variant="outlined" size="small">
-              Try Gemini again
-            </Button>
-          )}
-        </div>
+        <p className="mono muted" style={{ marginTop: 10, fontSize: 12 }}>
+          {fallbackReason}
+        </p>
       )}
 
       {narrationNotice && (
