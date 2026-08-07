@@ -41,6 +41,7 @@ export default function SharedEpisode() {
         segments={episode.segments}
         hosts={episode.hosts}
         hostPersonaId={episode.hostPersonaId}
+        tone={episode.tone}
       />
 
       <div className="panel" style={{ marginTop: 20 }}>

@@ -255,6 +255,7 @@ export default function Create() {
             voiceRate={voiceRate}
             hosts={generatedHostPersona?.names}
             hostPersonaId={generatedHostPersona?.id}
+            tone={tone}
           />
           <Button
             onClick={handleSaveEpisode}

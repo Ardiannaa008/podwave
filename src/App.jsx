@@ -3,6 +3,7 @@ import Navbar from './components/Navbar';
 import ProtectedRoute from './components/ProtectedRoute';
 import Home from './pages/Home';
 import Login from './pages/Login';
+import Signup from './pages/Signup';
 import Create from './pages/Create';
 import Library from './pages/Library';
 import EpisodeDetail from './pages/EpisodeDetail';
@@ -17,6 +18,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/login" element={<Login />} />
+          <Route path="/signup" element={<Signup />} />
           <Route path="/shared" element={<SharedEpisode />} />
           <Route path="/create" element={<ProtectedRoute><Create /></ProtectedRoute>} />
           <Route path="/library" element={<ProtectedRoute><Library /></ProtectedRoute>} />

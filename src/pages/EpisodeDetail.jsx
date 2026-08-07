@@ -3,6 +3,7 @@ import { useNavigate, useParams, Link } from 'react-router-dom';
 import { Box, Button, Skeleton } from '@mui/material';
 import { compressToEncodedURIComponent } from 'lz-string';
 import { useAuth } from '../context/AuthContext';
+import { estimateDurationMinutes } from '../utils/scriptGenerator';
 import { getEpisode } from '../utils/storage';
 import AudioPlayer from '../components/AudioPlayer';
 import Transcript from '../components/Transcript';
@@ -59,6 +60,7 @@ export default function EpisodeDetail() {
   const tags = Array.isArray(episode.tags)
     ? episode.tags.filter((tag) => typeof tag === 'string' && tag.trim())
     : [];
+  const meterCards = buildMeterCards(segments, length);
 
   function handleRemix() {
     navigate('/create', {
@@ -146,10 +148,19 @@ export default function EpisodeDetail() {
         </p>
       )}
 
+      {meterCards.length > 0 && (
+        <div className="meter-grid">
+          {meterCards.map((meter) => (
+            <MeterCard key={meter.id} {...meter} />
+          ))}
+        </div>
+      )}
+
       <AudioPlayer
         segments={segments}
         hosts={episode.hosts}
         hostPersonaId={episode.hostPersonaId}
+        tone={episode.tone}
       />
 
       <div className="panel" style={{ marginTop: 20 }}>
@@ -179,4 +190,103 @@ async function copyToClipboard(text) {
   textarea.select();
   document.execCommand('copy');
   textarea.remove();
+}
+
+function MeterCard({ label, value, percent, color }) {
+  return (
+    <div className="meter-card">
+      <div className="meter-label mono muted">
+        <span>{label}</span>
+        <span>{value}</span>
+      </div>
+      <div className="meter-track" aria-hidden="true">
+        <div
+          className="meter-fill"
+          style={{
+            width: `${Math.max(3, Math.min(100, percent))}%`,
+            background: color,
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function buildMeterCards(segments, length) {
+  const cleanSegments = Array.isArray(segments)
+    ? segments.filter((segment) => typeof segment?.text === 'string' && segment.text.trim())
+    : [];
+  if (cleanSegments.length === 0) return [];
+
+  const wordCountsBySpeaker = new Map();
+  let totalWords = 0;
+  let switches = 0;
+  let previousSpeaker = null;
+
+  cleanSegments.forEach((segment) => {
+    const speaker = typeof segment.speaker === 'string' && segment.speaker.trim() ? segment.speaker.trim() : 'Host';
+    const wordCount = countWords(segment.text);
+    if (wordCount <= 0) return;
+
+    totalWords += wordCount;
+    wordCountsBySpeaker.set(speaker, (wordCountsBySpeaker.get(speaker) || 0) + wordCount);
+
+    if (previousSpeaker && speaker !== previousSpeaker) switches += 1;
+    previousSpeaker = speaker;
+  });
+
+  if (totalWords <= 0) return [];
+
+  const speakerMeters = [...wordCountsBySpeaker.entries()].slice(0, 2).map(([speaker, words], index) => ({
+    id: `host-${speaker}`,
+    label: speaker.toUpperCase(),
+    value: `${Math.round((words / totalWords) * 100)}%`,
+    percent: (words / totalWords) * 100,
+    color: index === 0 ? 'var(--gold)' : 'var(--teal)',
+  }));
+
+  const paceMeter = buildPaceMeter(totalWords, length);
+  const exchangeMeter =
+    cleanSegments.length > 1
+      ? {
+          id: 'back-and-forth',
+          label: 'BACK-AND-FORTH',
+          value: `${switches} exchanges`,
+          percent: (switches / cleanSegments.length) * 100,
+          color: 'var(--gold)',
+        }
+      : null;
+
+  return [...speakerMeters, paceMeter, exchangeMeter].filter(Boolean);
+}
+
+function buildPaceMeter(totalWords, length) {
+  if (!['short', 'medium', 'long'].includes(length)) return null;
+
+  const duration = parseDurationEstimate(length);
+  if (!duration) return null;
+
+  const wpm = Math.round(totalWords / duration);
+  if (!Number.isFinite(wpm) || wpm <= 0) return null;
+
+  const minWpm = 90;
+  const maxWpm = 190;
+  return {
+    id: 'pace',
+    label: 'PACE',
+    value: `${wpm} wpm`,
+    percent: ((wpm - minWpm) / (maxWpm - minWpm)) * 100,
+    color: 'var(--teal)',
+  };
+}
+
+function parseDurationEstimate(length) {
+  const estimate = estimateDurationMinutes(length);
+  const values = estimate.match(/\d+/g)?.map(Number).filter((value) => Number.isFinite(value) && value > 0) || [];
+  if (values.length === 0) return null;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function countWords(text) {
+  return String(text).trim().split(/\s+/).filter(Boolean).length;
 }

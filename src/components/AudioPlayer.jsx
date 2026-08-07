@@ -1,6 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { Alert, Button } from '@mui/material';
 import { HOST_VOICE_PROFILES } from '../utils/scriptGenerator';
+import { generateEpisodeAudio } from '../utils/ttsGemini';
+
+const GEMINI_QUOTA_COOLDOWN_KEY = 'podwave_gemini_quota_cooldown_until';
+const GEMINI_QUOTA_COOLDOWN_MS = 10 * 60 * 1000;
 
 // Splits one segment's text into small chunks, because some browsers stop a
 // single SpeechSynthesisUtterance before a long passage has finished.
@@ -217,12 +221,52 @@ function buildPlayQueue(segments, voiceMap, baseRate) {
   return queue;
 }
 
-export default function AudioPlayer({ segments, voiceRate = 1, hosts, hostPersonaId }) {
+function getGeminiQuotaCooldown() {
+  try {
+    const value = Number(sessionStorage.getItem(GEMINI_QUOTA_COOLDOWN_KEY));
+    return Number.isFinite(value) ? value : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function rememberGeminiQuotaCooldown() {
+  try {
+    sessionStorage.setItem(GEMINI_QUOTA_COOLDOWN_KEY, String(Date.now() + GEMINI_QUOTA_COOLDOWN_MS));
+  } catch {
+    // If sessionStorage is blocked, the next play can simply try Gemini again.
+  }
+}
+
+function clearGeminiQuotaCooldown() {
+  try {
+    sessionStorage.removeItem(GEMINI_QUOTA_COOLDOWN_KEY);
+  } catch {
+    // Nothing to clear when storage is blocked.
+  }
+}
+
+function hasGeminiQuotaCooldown() {
+  const cooldownUntil = getGeminiQuotaCooldown();
+  if (!cooldownUntil) return false;
+  if (cooldownUntil > Date.now()) return true;
+
+  clearGeminiQuotaCooldown();
+  return false;
+}
+
+export default function AudioPlayer({ segments, voiceRate = 1, hosts, hostPersonaId, tone }) {
+  const audioRef = useRef(null);
+  const generatedAudioRef = useRef(null);
+  const geminiAbortRef = useRef(null);
   const queueRef = useRef([]);
   const indexRef = useRef(0);
   const playSessionRef = useRef(0);
-  const [status, setStatus] = useState('idle'); // idle | playing | paused
+  const [status, setStatus] = useState('idle'); // idle | generating | playing | paused
   const [speechError, setSpeechError] = useState('');
+  const [narrationNotice, setNarrationNotice] = useState('');
+  const [fallbackReason, setFallbackReason] = useState('');
+  const [playbackMode, setPlaybackMode] = useState('browser'); // gemini | browser
   const [voicesReady, setVoicesReady] = useState(false);
   const [currentSpeaker, setCurrentSpeaker] = useState(null);
 
@@ -236,6 +280,12 @@ export default function AudioPlayer({ segments, voiceRate = 1, hosts, hostPerson
     : [];
   const wordCount = cleanSegments.reduce((sum, s) => sum + s.text.split(/\s+/).length, 0);
   const speakerNames = [...new Set(cleanSegments.map((s) => s.speaker || 'Host'))];
+  const audioCacheKey = [
+    hostPersonaId || '',
+    Array.isArray(hosts) ? hosts.join('|') : '',
+    tone || '',
+    cleanSegments.map((segment) => `${segment.speaker || 'Host'}:${segment.text}`).join('\n'),
+  ].join('::');
 
   // Voice lists load asynchronously in most browsers — 'voiceschanged' fires
   // once they're actually available, so we wait for that instead of assuming
@@ -255,9 +305,34 @@ export default function AudioPlayer({ segments, voiceRate = 1, hosts, hostPerson
   useEffect(() => {
     return () => {
       playSessionRef.current += 1;
+      geminiAbortRef.current?.abort();
       if (speechSupported) window.speechSynthesis.cancel();
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current.src = '';
+      }
+      if (generatedAudioRef.current?.objectUrl) {
+        URL.revokeObjectURL(generatedAudioRef.current.objectUrl);
+      }
     };
   }, [speechSupported]);
+
+  useEffect(() => {
+    if (generatedAudioRef.current?.objectUrl) {
+      URL.revokeObjectURL(generatedAudioRef.current.objectUrl);
+      generatedAudioRef.current = null;
+    }
+    geminiAbortRef.current?.abort();
+    geminiAbortRef.current = null;
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.src = '';
+    }
+    setStatus('idle');
+    setCurrentSpeaker(null);
+    setNarrationNotice('');
+    setFallbackReason('');
+  }, [audioCacheKey]);
 
   function speakNext(sessionId) {
     if (sessionId !== playSessionRef.current) return;
@@ -295,13 +370,102 @@ export default function AudioPlayer({ segments, voiceRate = 1, hosts, hostPerson
     window.speechSynthesis.speak(utterance);
   }
 
-  function play() {
+  async function play() {
+    if (cleanSegments.length === 0) {
+      setSpeechError('There is no conversation to narrate.');
+      return;
+    }
+
+    setSpeechError('');
+    if (generatedAudioRef.current?.objectUrl) {
+      playGeneratedAudio(generatedAudioRef.current.objectUrl);
+      return;
+    }
+    if (hasGeminiQuotaCooldown()) {
+      setFallbackReason('Browser voices are active. Gemini quota is unavailable for a few minutes.');
+      playBrowserFallback();
+      return;
+    }
+
+    const requestSession = playSessionRef.current + 1;
+    playSessionRef.current = requestSession;
+    setStatus('generating');
+    setPlaybackMode('gemini');
+    setCurrentSpeaker(null);
+    setNarrationNotice('');
+    setFallbackReason('');
+    geminiAbortRef.current?.abort();
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    geminiAbortRef.current = controller;
+
+    try {
+      const generatedAudio = await generateEpisodeAudio({
+        segments: cleanSegments,
+        hosts,
+        tone,
+        hostPersonaId,
+        signal: controller?.signal,
+      });
+      if (requestSession !== playSessionRef.current) {
+        URL.revokeObjectURL(generatedAudio.objectUrl);
+        return;
+      }
+      generatedAudioRef.current = generatedAudio;
+      playGeneratedAudio(generatedAudio.objectUrl);
+    } catch (error) {
+      if (requestSession !== playSessionRef.current) return;
+      const fallbackMessage =
+        error?.code === 'RATE_LIMIT'
+          ? 'Browser voices are active. Gemini quota is unavailable for a few minutes.'
+          : error?.code === 'TIMEOUT'
+            ? "Gemini narration is taking too long - using your browser's built-in voices instead."
+          : "Using your browser's built-in voices - couldn't reach the higher-quality narration service.";
+      if (error?.code === 'RATE_LIMIT') rememberGeminiQuotaCooldown();
+      setFallbackReason(fallbackMessage);
+      playBrowserFallback();
+    } finally {
+      if (geminiAbortRef.current === controller) {
+        geminiAbortRef.current = null;
+      }
+    }
+  }
+
+  function playGeneratedAudio(objectUrl) {
+    if (!audioRef.current) return;
+
+    if (speechSupported) window.speechSynthesis.cancel();
+    playSessionRef.current += 1;
+    setPlaybackMode('gemini');
+    setNarrationNotice('');
+    setFallbackReason('');
+    setCurrentSpeaker(speakerNames.join(' / '));
+    audioRef.current.src = objectUrl;
+    audioRef.current.currentTime = 0;
+    audioRef.current.onended = () => {
+      setStatus('idle');
+      setCurrentSpeaker(null);
+    };
+    audioRef.current.onerror = () => {
+      setFallbackReason("Using your browser's built-in voices - couldn't play the generated narration.");
+      playBrowserFallback();
+    };
+    audioRef.current.play().then(() => {
+      setStatus('playing');
+    }).catch(() => {
+      setFallbackReason("Using your browser's built-in voices - couldn't play the generated narration.");
+      playBrowserFallback();
+    });
+  }
+
+  function playBrowserFallback() {
     if (!speechSupported) {
       setSpeechError('Speech narration is not supported in this browser.');
+      setStatus('idle');
       return;
     }
     if (cleanSegments.length === 0) {
       setSpeechError('There is no conversation to narrate.');
+      setStatus('idle');
       return;
     }
 
@@ -310,7 +474,7 @@ export default function AudioPlayer({ segments, voiceRate = 1, hosts, hostPerson
       hostPersonaId,
     });
     window.speechSynthesis.cancel();
-    setSpeechError('');
+    setPlaybackMode('browser');
     queueRef.current = buildPlayQueue(cleanSegments, voiceMap, voiceRate);
     indexRef.current = 0;
     playSessionRef.current += 1;
@@ -319,36 +483,75 @@ export default function AudioPlayer({ segments, voiceRate = 1, hosts, hostPerson
   }
 
   function pause() {
-    if (!speechSupported) return;
-    window.speechSynthesis.pause();
+    if (playbackMode === 'gemini') {
+      audioRef.current?.pause();
+    } else if (speechSupported) {
+      window.speechSynthesis.pause();
+    }
     setStatus('paused');
   }
 
   function resume() {
-    if (!speechSupported) return;
-    window.speechSynthesis.resume();
+    if (playbackMode === 'gemini') {
+      audioRef.current?.play().catch(() => {
+        setSpeechError('Narration could not be resumed.');
+        setStatus('idle');
+      });
+    } else if (speechSupported) {
+      window.speechSynthesis.resume();
+    } else {
+      return;
+    }
     setStatus('playing');
   }
 
-  function stop() {
-    if (!speechSupported) return;
+  function useBrowserVoicesNow() {
+    geminiAbortRef.current?.abort();
+    geminiAbortRef.current = null;
     playSessionRef.current += 1;
-    window.speechSynthesis.cancel();
+    setFallbackReason("Using your browser's built-in voices for immediate playback.");
+    playBrowserFallback();
+  }
+
+  function tryGeminiAgain() {
+    clearGeminiQuotaCooldown();
+    stop();
+    window.setTimeout(() => play(), 0);
+  }
+
+  function stop() {
+    playSessionRef.current += 1;
+    if (playbackMode === 'gemini' && audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.currentTime = 0;
+    }
+    if (speechSupported) window.speechSynthesis.cancel();
     setStatus('idle');
     setCurrentSpeaker(null);
   }
 
   return (
     <div className="panel audio-player">
+      <audio ref={audioRef} />
       <div className="audio-controls">
         <span className={`waveform ${status === 'playing' ? '' : 'idle'}`} aria-hidden="true">
           <span></span><span></span><span></span><span></span><span></span><span></span><span></span>
         </span>
 
         {status === 'idle' && (
-          <Button onClick={play} variant="contained" disabled={!speechSupported || cleanSegments.length === 0}>
+          <Button onClick={play} variant="contained" disabled={cleanSegments.length === 0}>
             ▶ Play episode
           </Button>
+        )}
+        {status === 'generating' && (
+          <>
+            <Button variant="contained" disabled>
+              Generating Gemini narration...
+            </Button>
+            <Button onClick={useBrowserVoicesNow} variant="outlined">
+              Use browser voices now
+            </Button>
+          </>
         )}
         {status === 'playing' && (
           <>
@@ -364,14 +567,39 @@ export default function AudioPlayer({ segments, voiceRate = 1, hosts, hostPerson
         )}
 
         <span className="muted mono audio-meta">
-          {wordCount} words · {speakerNames.length}-host conversation · via Web Speech API
+          {wordCount} words / {speakerNames.length}-host conversation / {playbackMode === 'gemini' ? 'via Gemini TTS' : 'via Web Speech API'}
         </span>
       </div>
 
       {status === 'playing' && currentSpeaker && (
-        <p className="mono muted" style={{ marginTop: 10, fontSize: 12 }}>
-          Speaking now: <strong>{currentSpeaker}</strong>
-        </p>
+        <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <span className="on-air">
+            <span className="on-air-dot"></span>
+            <span>on air</span>
+          </span>
+          <span className="mono muted" style={{ fontSize: 12 }}>
+            Speaking now: <strong>{currentSpeaker}</strong>
+          </span>
+        </div>
+      )}
+
+      {status === 'playing' && playbackMode === 'browser' && fallbackReason && (
+        <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <span className="mono muted" style={{ fontSize: 12 }}>
+            {fallbackReason}
+          </span>
+          {fallbackReason.includes('quota') && (
+            <Button onClick={tryGeminiAgain} variant="outlined" size="small">
+              Try Gemini again
+            </Button>
+          )}
+        </div>
+      )}
+
+      {narrationNotice && (
+        <Alert severity="info" sx={{ mt: 2 }}>
+          {narrationNotice}
+        </Alert>
       )}
 
       {!voicesReady && speechSupported && (

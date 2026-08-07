@@ -11,7 +11,7 @@ root.render(
   <React.StrictMode>
     <ThemeProvider>
       <AuthProvider>
-        <BrowserRouter>
+        <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
           <App />
         </BrowserRouter>
       </AuthProvider>

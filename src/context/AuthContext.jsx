@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, useEffect } from 'react';
+import { findUser, hashPassword, saveUser } from '../utils/authStorage';
 
 const AuthContext = createContext(null);
 
@@ -35,9 +36,23 @@ export function AuthProvider({ children }) {
     }
   }, [user]);
 
-  function login(username) {
+  function login(username, password) {
+    const storedUser = findUser(username);
+    if (!storedUser) {
+      throw new Error('No account found for that username.');
+    }
+    if (storedUser.passwordHash !== hashPassword(password)) {
+      throw new Error('Incorrect password.');
+    }
+
     const token = makeFakeToken();
-    setUser({ username, token });
+    setUser({ username: storedUser.username, token });
+  }
+
+  function signup(username, password) {
+    const storedUser = saveUser(username, hashPassword(password));
+    const token = makeFakeToken();
+    setUser({ username: storedUser.username, token });
   }
 
   function logout() {
@@ -45,7 +60,7 @@ export function AuthProvider({ children }) {
   }
 
   return (
-    <AuthContext.Provider value={{ user, login, logout }}>
+    <AuthContext.Provider value={{ user, login, signup, logout }}>
       {children}
     </AuthContext.Provider>
   );

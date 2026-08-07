@@ -45,6 +45,7 @@ export default function Navbar() {
             <span className="waveform idle" aria-hidden="true">
               <span></span><span></span><span></span><span></span>
             </span>
+            <span className="brand-dot" aria-hidden="true"></span>
             <strong style={{ fontFamily: 'var(--font-display)', fontSize: 18 }}>Podwave</strong>
           </NavLink>
           {user && (

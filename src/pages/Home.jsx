@@ -7,6 +7,10 @@ export default function Home() {
 
   return (
     <div className="page home-page">
+      <div className="on-air" style={{ marginBottom: 14 }} aria-hidden="true">
+        <span className="on-air-dot"></span>
+        <span>on air</span>
+      </div>
       <div className="waveform" style={{ justifyContent: 'center', height: 60, marginBottom: 24 }} aria-hidden="true">
         <span></span><span></span><span></span><span></span><span></span><span></span><span></span>
       </div>
